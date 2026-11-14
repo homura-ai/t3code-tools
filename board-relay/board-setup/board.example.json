@@ -1,0 +1,122 @@
+{
+  "_comment": "board_setup.py config. Keys starting with _ are ignored. The _ keys next to each option describe it. Check it with: board_setup.py check --config THIS_FILE",
+
+  "api": "http://127.0.0.1:8090/api",
+  "token_file": null,
+  "_token_file": "Path to a file holding a Wekan API token. Leave null when a local proxy adds the agents token (the wekan/ setup in this repo).",
+  "board_url": "https://board.example:8445/b/{board}/{slug}",
+
+  "title": "Personal + agents",
+  "color": "cleandark",
+  "_color": "Board color/theme, one of: belize nephritis pomegranate pumpkin wisteria moderatepink strongcyan limegreen midnight dark relax corteza appleglasspastel clearblue cleargreen clearorange clearpink clearpurple clearred natural modern moderndark exodark cleandark cleanlight. Change it later in the board menu (Board settings > Color).",
+  "permission": "private",
+  "members": [
+    {"userId": "HUMAN_USER_ID", "name": "alex", "isAdmin": true}
+  ],
+  "_members": "The API user (the agents user) creates the board and is its first admin. Each entry is added with action add; flags: isAdmin isCommentOnly isNoComments isWorker isReadOnly.",
+  "swimlane": "Main",
+  "_swimlane": "New title for the board's one swimlane. Wekan v12 binds every list to a swimlane, so this config uses a single swimlane; agent and personal cards are told apart by the source labels.",
+
+  "lists": [
+    {"key": "inbox",      "title": "Inbox",          "color": "sky"},
+    {"key": "agent-asks", "title": "Agent asks",     "color": "purple"},
+    {"key": "waiting",    "title": "Waiting on me",  "color": "orange"},
+    {"key": "doing",      "title": "Doing",          "color": "blue", "wipLimit": {"value": 5, "enabled": true, "soft": true}},
+    {"key": "done",       "title": "Done",           "color": "green"},
+    {"key": "templates",  "title": "Templates",      "color": "gray"}
+  ],
+  "_lists": "In board order. color: a label color name or #rrggbb. wipLimit: soft limits warn, hard limits block adding cards. starred: true pins the list.",
+
+  "labels": [
+    {"key": "src-agent",    "name": "agent",       "color": "purple"},
+    {"key": "src-me",       "name": "me",          "color": "sky"},
+    {"key": "src-system",   "name": "system",      "color": "gray"},
+    {"key": "src-outside",  "name": "outside",     "color": "peachpuff"},
+    {"key": "p1",           "name": "P1 now",      "color": "red"},
+    {"key": "p2",           "name": "P2 soon",     "color": "orange"},
+    {"key": "p3",           "name": "P3 normal",   "color": "yellow"},
+    {"key": "p4",           "name": "P4 someday",  "color": "silver"}
+  ],
+  "_labels": "Source labels say who or what raised the card; priority labels say how soon. Colors: white green yellow orange red purple blue sky lime pink black silver peachpuff crimson plum darkgreen slateblue magenta gold navy gray saddlebrown paleturquoise mistyrose indigo.",
+
+  "custom_fields": [
+    {"key": "kind",    "name": "Kind",           "type": "dropdown", "items": ["Decision", "Blocker", "Result", "Task", "Idea"],
+     "showOnCard": true, "showLabelOnMiniCard": true, "automaticallyOnCard": true},
+    {"key": "effort",  "name": "Effort",         "type": "dropdown", "items": ["5 min", "30 min", "2 h", "Half day+"],
+     "showOnCard": true, "showLabelOnMiniCard": true},
+    {"key": "default", "name": "If no answer",   "type": "text", "showOnCard": true},
+    {"key": "thread",  "name": "T3 thread",      "type": "text", "showOnCard": true},
+    {"key": "project", "name": "Project",        "type": "text", "showOnCard": true},
+    {"key": "link",    "name": "Link",           "type": "text", "showOnCard": true}
+  ],
+  "_custom_fields": "type: text number date dropdown dropdownMultiSelect checkbox currency stringtemplate. automaticallyOnCard adds the (empty) field to every new card. showLabelOnMiniCard shows name and value on the minicard.",
+
+  "card_settings": {
+    "cardAging": true, "cardAgingDays1": 3, "cardAgingDays2": 7, "cardAgingDays3": 14,
+    "allowsCardCounterList": true,
+    "allowsCardNumber": true, "allowsCardNumberOnMinicard": true,
+    "showLabelText": true, "allowsLabelsOnMinicard": true,
+    "allowsCommentCountOnMinicard": true, "allowsUnreadCommentsOnMinicard": true, "allowsUnreadCommentsOnCard": true,
+    "allowsDescriptionBadgeOnMinicard": true,
+    "allowsDueDateOnMinicard": true, "allowsChecklistsOnMinicard": true,
+    "allowsRequestedByOnMinicard": false, "allowsAssignedByOnMinicard": false,
+    "allowsReceivedDateOnMinicard": false, "allowsSpentTimeOnMinicard": false,
+    "allowsStartDateOnMinicard": false, "allowsEndDateOnMinicard": false,
+    "allowsMembersOnMinicard": false,
+    "allowsPoker": false, "allowsPokerOnMinicard": false,
+    "allowsVoteOnMinicard": false, "allowsStickersOnMinicard": false,
+    "allowsPomodoroOnMinicard": false, "allowsLocation": false
+  },
+  "_card_settings": "Wekan's per-board feature switches (board menu > Card Settings and Minicard Settings). Any of the 113 flags in board_setup.py CARD_SETTING_FLAGS, plus cardAgingDays1-3. Flags left out keep Wekan's default (on for almost all).",
+
+  "board_views": {
+    "default": "board-view-lists",
+    "show": ["board-view-lists", "board-view-swimlanes", "board-view-table", "board-view-cal",
+             "board-view-timeline", "board-view-stats", "board-view-aging-wip", "board-view-cumulative-flow"],
+    "hide_others": true
+  },
+  "_board_views": "Wekan has 40 board views. show + hide_others leaves only these in the view switcher; hide lists views to hide one by one. default is the view new visitors get.",
+
+  "rules": [
+    {"title": "Doing: stamp the start date", "trigger": {"activityType": "moveCard", "list": "doing"},
+     "action": {"actionType": "setDate", "dateField": "startAt"}},
+    {"title": "Done: stamp the end date", "trigger": {"activityType": "moveCard", "list": "done"},
+     "action": {"actionType": "updateDate", "dateField": "endAt"}},
+    {"title": "Done: mark complete", "trigger": {"activityType": "moveCard", "list": "done"},
+     "action": {"actionType": "markCardComplete"}},
+    {"title": "Out of Done: mark incomplete", "trigger": {"activityType": "moveCard", "oldList": "done"},
+     "action": {"actionType": "markCardIncomplete"}},
+    {"title": "New in Agent asks: add the agent label", "trigger": {"activityType": "createCard", "list": "agent-asks"},
+     "action": {"actionType": "addLabel", "label": "src-agent"}}
+  ],
+  "_rules": "Wekan Rules (board menu > Rules). trigger.list / oldList are list keys, label keys for labels; other trigger and action fields pass through to Wekan. Set \"enabled\": false to create a rule switched off.",
+
+  "webhooks": [],
+  "_webhooks": "Outgoing webhooks (board menu > Outgoing webhooks), for example [{\"url\": \"http://127.0.0.1:9000/wekan\", \"title\": \"dashboard\", \"enabled\": false}]. Wekan refuses private addresses unless an admin lists the host under Admin Panel > Webhooks > internal hosts.",
+
+  "templates": {
+    "list": "templates",
+    "cards": [
+      {"title": "AGENT NAME: decide <the exact question>?", "labels": ["src-agent", "p2"], "fields": {"kind": "Decision"},
+       "description": "**Decision needed:** <the exact question, one line>\n\n**Context:** <two or three lines>\n\n**Options:**\n1. <option A>: <cost, risk>\n2. <option B>: <cost, risk>\n\n**My recommendation:** <A or B, and why>\n\n**If no answer:** <what I will do, and when> (also in the \"If no answer\" field)\n\n**Evidence:** <links, paths, commands>\n\nCopy this card (card menu > Copy card) into Agent asks and fill it in. A human answers by commenting; the comment reaches the agent's thread."},
+      {"title": "AGENT NAME: blocked on <what>", "labels": ["src-agent", "p1"], "fields": {"kind": "Blocker"},
+       "description": "**Blocked on:** <what>\n\n**What I tried:** <steps>\n\n**What I need from you:** <the one action: a sign-in, a password, a yes or no>\n\n**Meanwhile:** <what I am doing instead>"},
+      {"title": "AGENT NAME: result: <what happened>", "labels": ["src-agent", "p3"], "fields": {"kind": "Result"},
+       "description": "**Result:** <one line>\n\n**Evidence:** <numbers, links>\n\n**Next:** <what follows, or nothing>"},
+      {"title": "Task: <what>", "labels": ["src-me", "p3"], "fields": {"kind": "Task", "effort": "30 min"},
+       "description": "**Why:** <one line>\n\n**Done when:** <the check>",
+       "checklists": [{"title": "Steps", "items": ["First step", "Second step"]}]},
+      {"title": "Idea: <what>", "labels": ["src-me", "p4"], "fields": {"kind": "Idea"},
+       "description": "<the idea, and what would make it worth doing>"}
+    ]
+  },
+  "_templates": "Template cards are made in templates.list. Wekan's own card templates live in each user's personal Templates board, which this script does not touch.",
+
+  "copy": {
+    "from_board": null,
+    "card_url": "https://board.example:8445/b/{board}/board/{card}",
+    "usernames": {"HUMAN_USER_ID": "alex", "AGENTS_USER_ID": "agents"},
+    "cards": []
+  },
+  "_copy": "Cards to copy from an old board (read only; the originals are never changed). Each: {\"id\": SOURCE_CARD_ID, \"list\": LIST_KEY, \"labels\": [...], \"fields\": {...}, \"comments\": \"digest\" or \"none\", \"title\": optional new title}. A digest adds the old comments as one comment."
+}

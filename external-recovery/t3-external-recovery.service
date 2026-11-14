@@ -1,0 +1,25 @@
+[Unit]
+Description=T3 Code recovery agent (Claude Code in a Kitty window)
+After=graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=/usr/bin/kitty -o allow_remote_control=socket-only --listen-on unix:%t/t3-external-recovery-kitty.sock --class t3-external-recovery --title "T3 Recovery" /usr/bin/python3 %h/.local/lib/t3-external-recovery/recovery.py run
+Restart=always
+RestartSec=2
+KillMode=control-group
+TimeoutStopSec=15
+UMask=0077
+Environment=ELECTRON_RUN_AS_NODE=
+# Kitty needs the graphical session. %t is $XDG_RUNTIME_DIR; adjust DISPLAY and
+# WAYLAND_DISPLAY if your session uses other names.
+Environment="DISPLAY=:0"
+Environment="WAYLAND_DISPLAY=wayland-0"
+Environment="XDG_RUNTIME_DIR=%t"
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus"
+
+[Install]
+WantedBy=graphical-session.target

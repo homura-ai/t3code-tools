@@ -1,0 +1,19 @@
+{
+  "state_dir": "~/.local/state/t3-external-recovery",
+  "workdir": "~",
+  "port": 3773,
+  "backend_marker": "apps/server/dist/bin.mjs",
+  "launcher": "t3code",
+  "launcher_env": {"T3CODE_BACKGROUND_GIT": "0"},
+  "recovered_unit": "t3code-recovered",
+  "claude": "claude",
+  "model": "claude-opus-5-5",
+  "effort": "low",
+  "session_name": "T3 Recovery",
+  "prompt_file": null,
+  "pause_files": [],
+  "usage_events": null,
+  "anthropic_base_url": null,
+  "retired_threads_file": null,
+  "usage_holds_file": null
+}

@@ -1,0 +1,181 @@
+#!/usr/bin/python3
+"""Load a staged T3 Code build: verify, pause a watchdog, restart T3, wake an agent, roll back on failure.
+
+  t3-load-build <staged-file> <sha256> <wake-message-file> [--detach] [--live PATH] [--settle SECONDS]
+
+Refuses to run while ~/.local/state/t3-load-build/no-restart-until (or a file in
+$T3_LOAD_GUARDS) holds a UTC ISO time in the future. Run it detached (--detach does that) because it
+stops T3, which stops the agent that started it. Message text goes to `t3 thread send` on stdin,
+to the thread in $T3_LOAD_WAKE_THREAD; with none set, the wake step is skipped and the
+health check alone decides.
+"""
+import argparse
+from datetime import datetime, timedelta, timezone
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+HOME = Path.home()
+STATE = HOME / '.local/state/t3-load-build'
+LOG = STATE / 'load.log'
+# Files holding a UTC ISO time; while any is in the future, a restart is refused.
+# Extra guard files (for example a "quiet run" marker) can be added, colon-separated,
+# in T3_LOAD_GUARDS.
+GUARDS = (STATE / 'no-restart-until',) + tuple(
+    Path(x).expanduser() for x in os.environ.get('T3_LOAD_GUARDS', '').split(':') if x)
+# Optional watchdog pause file written before a restart (T3_LOAD_PAUSE_FILE; empty = none).
+PAUSE_FILE = Path(os.environ['T3_LOAD_PAUSE_FILE']).expanduser() if os.environ.get('T3_LOAD_PAUSE_FILE') else None
+T3_CLI = HOME / '.t3/bin/t3'
+LAUNCHER = HOME / '.local/bin/t3code'
+WAKE_THREAD = os.environ.get('T3_LOAD_WAKE_THREAD', '')
+SETTINGS = ('T3_LOAD_GUARDS', 'T3_LOAD_PAUSE_FILE', 'T3_LOAD_WAKE_THREAD')  # passed on by --detach
+SETTLE = 90
+ROLLBACK_TEXT = ('The T3 build loader tried to load a staged build ({live}); T3 did not come back healthy or the wake '
+                 'message could not be delivered, so it rolled back (the new build is now {live}.off; log: ~/.local/state/t3-load-build/load.log). '
+                 'Check your reviewers and scheduled tasks and report in one line.')
+
+
+def iso(t):
+    return t.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def active_guard(now):
+    """Return the guard file whose time is still in the future, else None."""
+    for guard in GUARDS:
+        try:
+            until = datetime.fromisoformat(guard.read_text().strip().replace('Z', '+00:00'))
+        except (OSError, ValueError):
+            continue
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        if until > now:
+            return guard
+    return None
+
+
+def live_name(staged):
+    name = staged.name
+    for old, new in (('-next.AppImage.staged', '-x86_64.AppImage'), ('.staged', '')):
+        if name.endswith(old):
+            return staged.with_name(name[:-len(old)] + new)
+    raise ValueError('staged file must end in .staged')
+
+
+class Real:
+    sleep = staticmethod(time.sleep)
+
+    @staticmethod
+    def now():
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def t3_running():
+        return subprocess.run(['pgrep', '-x', 't3code'], capture_output=True).returncode == 0
+
+    @staticmethod
+    def stop_t3(sleep):
+        subprocess.run(['pkill', '-TERM', '-x', 't3code'])
+        sleep(8)
+        subprocess.run(['pkill', '-KILL', '-x', 't3code'], stderr=subprocess.DEVNULL)
+        sleep(2)
+
+    @staticmethod
+    def start_t3():
+        subprocess.run(['systemd-run', '--user', f'--unit=t3code-app-{int(time.time())}', '--collect', str(LAUNCHER)],
+                       capture_output=True)
+
+    @staticmethod
+    def send(text):
+        if not WAKE_THREAD:
+            return True
+        r = subprocess.run([str(T3_CLI), 'thread', 'send', WAKE_THREAD, '-', '--mode', 'auto'], input=text, text=True,
+                           capture_output=True, timeout=30)
+        return r.returncode == 0
+
+
+def log(text, deps):
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, 'a') as out:
+        out.write(f'{iso(deps.now())} {text}\n')
+
+
+def pause_watchdog(deps, minutes):
+    if PAUSE_FILE is None:
+        return
+    PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PAUSE_FILE.write_text(iso(deps.now() + timedelta(minutes=minutes)) + '\n')
+
+
+def wake(text, deps):
+    return deps.send(text) or (deps.sleep(30) or deps.send(text))
+
+
+def load(staged, sha, wake_file, deps=Real, live=None, settle=SETTLE):
+    """Return 0 loaded, 1 refused/failed before touching T3, 2 rolled back, 3 refused by a guard."""
+    guard = active_guard(deps.now())
+    if guard:
+        log(f'refused: {guard.name} is in the future', deps)
+        return 3
+    staged = Path(staged)
+    live = Path(live) if live else live_name(staged)
+    if not staged.is_file():
+        log('staged file missing, nothing done', deps)
+        return 1
+    if hashlib.sha256(staged.read_bytes()).hexdigest() != sha.lower():
+        log('sha256 mismatch, nothing done', deps)
+        return 1
+    try:
+        text = Path(wake_file).read_text()
+    except OSError:
+        log('wake message file unreadable, nothing done', deps)
+        return 1
+    pause_watchdog(deps, 8)
+    staged.rename(live)
+    os.utime(live)
+    log(f'stopping T3; loading {live.name}', deps)
+    deps.stop_t3(deps.sleep)
+    deps.start_t3()
+    deps.sleep(settle)
+    if deps.t3_running() and wake(text, deps):
+        log('T3 is running on the new build; wake sent', deps)
+        return 0
+    log('T3 not healthy on the new build; rolling back', deps)
+    pause_watchdog(deps, 8)
+    deps.stop_t3(deps.sleep)
+    live.rename(live.with_name(live.name + '.off'))
+    deps.start_t3()
+    deps.sleep(settle)
+    if deps.t3_running() and wake(ROLLBACK_TEXT.format(live=live.name), deps):
+        log('rolled back; T3 is running; wake sent', deps)
+    else:
+        log('T3 did NOT come up after rollback', deps)
+    return 2
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('staged')
+    parser.add_argument('sha256')
+    parser.add_argument('wake_file')
+    parser.add_argument('--live')
+    parser.add_argument('--settle', type=int, default=SETTLE)
+    parser.add_argument('--detach', action='store_true', help='re-run detached with systemd-run and return')
+    args = parser.parse_args()
+    if args.detach:
+        argv = [sys.executable, os.path.abspath(__file__), args.staged, args.sha256, args.wake_file,
+                '--settle', str(args.settle)] + (['--live', args.live] if args.live else [])
+        # systemd-run starts from the user manager's environment, not ours: pass the settings
+        # on, or the detached run would drop its guards, watchdog pause and wake thread.
+        setenv = [f'--setenv={k}={v}' for k, v in sorted(os.environ.items()) if k in SETTINGS]
+        r = subprocess.run(['systemd-run', '--user', f'--unit=t3-load-build-{int(time.time())}', '--collect']
+                           + setenv + argv)
+        return r.returncode
+    return load(args.staged, args.sha256, args.wake_file, live=args.live, settle=args.settle)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

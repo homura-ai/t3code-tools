@@ -1,0 +1,28 @@
+[Unit]
+Description=Wekan kanban board
+Requires=wekan-db.service
+After=wekan-db.service
+
+[Container]
+Image=ghcr.io/wekan/wekan:v12.67
+ContainerName=wekan-app
+Pod=wekan.pod
+Volume=%h/.local/share/wekan/files:/data:Z
+Environment=MONGO_URL=mongodb://127.0.0.1:27017/wekan
+# The address people open the board at (for example a tailscale serve URL).
+Environment=ROOT_URL=https://board.example:8445
+Environment=WRITABLE_PATH=/data
+Environment=WITH_API=true
+Environment=DEFAULT_METEOR_REACTIVITY_ORDER=polling
+Environment=METEOR_REACTIVITY_ORDER=polling
+Environment=DDP_TRANSPORT=sockjs
+Environment=CARDS_LOADING=auto
+Environment=BIGEVENTS_PATTERN=NONE
+Environment=BROWSER_POLICY_ENABLED=true
+Environment=TZ=UTC
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

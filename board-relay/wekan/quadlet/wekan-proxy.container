@@ -1,0 +1,17 @@
+[Unit]
+Description=Auto-login proxy in front of the Wekan board
+After=wekan.service
+
+[Container]
+Image=docker.io/library/caddy:2.10.2-alpine
+ContainerName=wekan-proxy
+Pod=wekan.pod
+Volume=%h/.local/share/wekan/proxy/Caddyfile:/etc/caddy/Caddyfile:ro,Z
+Volume=%h/.local/share/wekan/proxy/site:/srv:ro,Z
+EnvironmentFile=%h/.local/share/wekan/proxy/env
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Deliver human Wekan board comments to the posting agent's T3 thread
+After=network-online.target
+# Retries every 30 s forever (for example while the board or T3 is down).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=/usr/bin/python3 %h/.local/bin/board-replies.py --config %h/.config/board-relay/config.json
+Restart=always
+RestartSec=30
+# Exit 2: no state file (run --seed once) or a usage error; retrying cannot fix either.
+RestartPreventExitStatus=2
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

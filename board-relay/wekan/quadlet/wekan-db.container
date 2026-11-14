@@ -1,0 +1,15 @@
+[Unit]
+Description=Wekan database (MongoDB)
+
+[Container]
+Image=docker.io/library/mongo:7.0.25
+ContainerName=wekan-db
+Pod=wekan.pod
+Volume=%h/.local/share/wekan/db:/data/db:Z
+Exec=mongod --bind_ip 127.0.0.1 --quiet
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

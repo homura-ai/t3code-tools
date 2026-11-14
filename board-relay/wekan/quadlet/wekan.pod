@@ -1,0 +1,5 @@
+[Pod]
+PodName=wekan
+# Local only. To reach it from another machine, add a PublishPort on a private
+# address (for example your tailnet IP) or publish 127.0.0.1:8090 with tailscale serve.
+PublishPort=127.0.0.1:8090:8091

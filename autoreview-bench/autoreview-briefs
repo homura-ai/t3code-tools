@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""Write a Markdown list of a T3 thread's autoreviewers and their briefs (T3 state is read-only).
+
+Lists every reviewer thread ever attached to a thread or to one of its
+reviewers: title, model, effort, live state, custom preamble / minBatchChars
+and the brief. Prints and writes only briefs and preambles, never other message
+text, tokens or keys. Fails safely if the database layout is unexpected.
+"""
+import argparse
+from datetime import datetime
+import json
+import os
+from pathlib import Path
+import re
+import sqlite3
+
+DB = Path(os.environ.get('T3_STATE_DB') or Path.home() / '.t3/userdata/statev2.sqlite')
+OUT = Path('autoreviewer-briefs.md')
+STANDARD_START = 'You are an autoreviewer for the T3 thread'
+BRIEF_MARK = 'Review brief: '
+ACTIVITY_MARK = '\n\nActivity so far in thread'
+NEED = {'orchestration_v2_projection_threads': {'thread_id', 'title', 'created_at', 'payload_json'},
+        'orchestration_v2_projection_messages': {'thread_id', 'role', 'created_at', 'payload_json'}}
+HEADER = '''# Autoreviewer briefs for {root} (regenerated {when})
+
+Every reviewer ever attached to {root} or to one of its reviewers, with its model and latest brief, so any of them can be re-added with the `autoreview` tool (action `add`, with `preamble` and `minBatchChars` where shown). "attached" is the live state when this file was generated; `autoreview` action `list` is authoritative. Regenerate with `autoreview-briefs --thread <id> --out <this file>`.
+'''
+
+
+def check_layout(connection):
+    for table, columns in NEED.items():
+        found = {row[1] for row in connection.execute(f'PRAGMA table_info({table})')}
+        if not columns <= found:
+            raise ValueError(f'unexpected layout of {table}')
+
+
+def selection(payload):
+    chosen = payload.get('modelSelection') or {}
+    options = chosen.get('options') or []
+    if isinstance(options, dict):
+        options = [{'id': k, 'value': v} for k, v in options.items()]
+    effort = next((o.get('value') for o in options if o.get('id') in ('effort', 'reasoningEffort')), None)
+    return chosen.get('model') or '?', effort or '?'
+
+
+def first_message(connection, thread_id):
+    row = connection.execute('''SELECT json_extract(payload_json, '$.text') FROM orchestration_v2_projection_messages
+        WHERE thread_id=? AND role='user' ORDER BY created_at LIMIT 1''', (thread_id,)).fetchone()
+    return (row[0] or '') if row else ''
+
+
+def split_message(text):
+    """-> (custom preamble or None, brief). Never returns the activity history."""
+    start = text.find(BRIEF_MARK)
+    if start < 0:
+        return None, ''
+    end = text.find(ACTIVITY_MARK, start)
+    brief = text[start + len(BRIEF_MARK):end if end >= 0 else len(text)].strip()
+    preamble = None if text.startswith(STANDARD_START) else text[:start].strip()
+    return preamble, brief
+
+
+def collect(connection, root):
+    row = connection.execute('SELECT title, payload_json FROM orchestration_v2_projection_threads WHERE thread_id=?',
+                             (root,)).fetchone()
+    if row is None:
+        raise ValueError('thread not found')
+    entries, seen = [], set()
+    queue = [(root, row[0], True, json.loads(row[1]))]
+    while queue:
+        parent, parent_title, parent_live, payload = queue.pop(0)
+        if parent in seen:
+            continue
+        seen.add(parent)
+        live = {a.get('threadId'): a for a in payload.get('autoreviewers') or []}
+        children = connection.execute('''SELECT thread_id, title, created_at, payload_json
+            FROM orchestration_v2_projection_threads WHERE thread_id LIKE '%autoreview-add%'
+            AND json_extract(payload_json, '$.lineage.parentThreadId')=? ORDER BY created_at''', (parent,)).fetchall()
+        for tid, title, created, pj in children:
+            child = json.loads(pj)
+            model, effort = selection(child)
+            entry_live = live.get(tid)
+            preamble, brief = split_message(first_message(connection, tid))
+            if entry_live:
+                brief = entry_live.get('brief') or brief
+                preamble = entry_live.get('preamble') or preamble
+            entries.append(dict(id=tid, title=title, created=created, model=model, effort=effort,
+                                attached=bool(entry_live and parent_live), parent=parent_title if parent != root else None,
+                                preamble=preamble, min_batch=(entry_live or {}).get('minBatchChars', 0), brief=brief))
+            queue.append((tid, title, bool(entry_live and parent_live), child))
+    return entries
+
+
+def keep_newest(entries):
+    best = {}
+    for e in entries:
+        key = (e['title'], e['model'], e['effort'])
+        if key not in best or (e['attached'], e['created']) > (best[key]['attached'], best[key]['created']):
+            best[key] = e
+    return sorted(best.values(), key=lambda e: (not e['attached'], e['created']))
+
+
+def existing_notes(path):
+    """Hand-written 'Note (' lines under an entry heading survive regeneration."""
+    notes, heading = {}, None
+    if path.exists():
+        for line in path.read_text(encoding='utf-8').splitlines():
+            if line.startswith('## '):
+                heading = re.sub(r' \((attached|removed)[^)]*\)$', '', line[3:])
+            elif heading and line.startswith('Note ('):
+                notes.setdefault(heading, []).append(line)
+    return notes
+
+
+def render(entries, notes, when, root='the thread'):
+    out = [HEADER.format(when=when, root=root)]
+    for e in entries:
+        state = 'attached' if e['attached'] else 'removed'
+        if e['attached'] and e['parent']:
+            state = f'attached to {e["parent"].split(":")[0]}'
+        out.append(f'## {e["title"]} ({state})\n')
+        out.append(f'Model: `{e["model"]}`, effort `{e["effort"]}`. Preamble: {"custom (below)" if e["preamble"] else "standard"}. '
+                   f'minBatchChars: {e["min_batch"]}.\n')
+        out.extend(n + '\n' for n in notes.get(e['title'], []))
+        if e['preamble']:
+            out.append('Preamble:\n\n```text\n' + e['preamble'] + '\n```\n')
+        out.append('Brief:\n\n```text\n' + e['brief'] + '\n```\n')
+    return '\n'.join(out)
+
+
+def generate(connection, root, out_path, when):
+    check_layout(connection)
+    entries = keep_newest(collect(connection, root))
+    if not entries:
+        raise ValueError('no reviewers found')
+    title = connection.execute('SELECT title FROM orchestration_v2_projection_threads WHERE thread_id=?',
+                               (root,)).fetchone()[0]
+    text = render(entries, existing_notes(out_path), when, title or root)
+    out_path.write_text(text, encoding='utf-8')
+    return entries
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--thread', required=True, help='parent T3 thread id')
+    parser.add_argument('--out', type=Path, default=OUT, help='Markdown file to write (default: %(default)s)')
+    parser.add_argument('--db', type=Path, default=DB,
+                        help='T3 state database, opened read-only (default: $T3_STATE_DB or %(default)s)')
+    args = parser.parse_args()
+    when = datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %Z')
+    if not args.db.exists():
+        raise SystemExit(f'autoreview-briefs: failed safely, no database at {args.db}')
+    try:
+        with sqlite3.connect(args.db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2) as connection:
+            entries = generate(connection, args.thread, args.out, when)
+    except (sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+        raise SystemExit(f'autoreview-briefs: failed safely, {type(exc).__name__}: {exc}') from None
+    for e in entries:
+        print(('attached ' if e['attached'] else 'removed  ') + f'{e["title"]} | {e["model"]} {e["effort"]}')
+    print(f'wrote {args.out}')
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+"""Print an aggregate-only benchmark from a read-only snapshot of local T3 state."""
+import argparse
+import os
+from collections import Counter, defaultdict
+from datetime import datetime
+import json
+import math
+from pathlib import Path
+import re
+import sqlite3
+import statistics
+import sys
+import urllib.parse
+
+DB = Path(os.environ.get('T3_STATE_DB') or Path.home() / '.t3/userdata/statev2.sqlite')
+META_PREFIX = 'meta-review '
+VERDICTS = ('HOLDS', 'WRONG', 'STALE', 'DUPLICATE', 'OUT OF REMIT', 'NIT')
+LGTM = re.compile(r'\s*(?:\*\*)?LGTM(?:\*\*)?[.!]?\s*', re.I)
+# Combined post (T3 builds with steering): one or more blocks
+# `--- Autoreview from "<title>" (thread <id>) ---` followed by that reviewer's text.
+BLOCK = re.compile(r'^--- Autoreview from ["“](.*?)["”] \(thread (\S+)\) ---[ \t]*$', re.M)
+COMBINED = 'Autoreview findings from reviewers'
+# `Delegated task node:delegated-task:server%3Aautoreview-findings%3Arun%3Athread%3A<enc id>%3Aordinal%3AN (<title>) [completed]:`
+DELEGATED = re.compile(r'^Delegated task (\S*autoreview-findings\S*) \(.*\) \[completed\]:[ \t]*\n', re.I)
+
+
+def split_posts(text):
+    """Yield (thread id or None, title or None, finding text) per finding post in one message."""
+    text = text or ''
+    old = re.match(r'^Autoreview from ["“](.*?)["”][^\n]*\n', text)
+    if old:
+        yield None, old[1], text[old.end():].strip()
+    elif text.startswith(COMBINED):
+        found = list(BLOCK.finditer(text))
+        for i, m in enumerate(found):
+            end = found[i + 1].start() if i + 1 < len(found) else len(text)
+            yield m[2], m[1], text[m.end():end].strip()
+    else:
+        d = DELEGATED.match(text)
+        if d:
+            node = urllib.parse.unquote(urllib.parse.unquote(d[1]))
+            m = re.search(r'run:thread:(\S+?):ordinal:\d+', node)
+            yield (m[1] if m else None), None, text[d.end():].strip()
+
+
+def stamp(value):
+    return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
+def clean(value):
+    """Only metadata and numbers reach the output; escape Markdown table cells."""
+    return str(value or '').replace('\n', ' ').replace('\r', ' ').replace('|', '\\|')
+
+
+def normalized(value):
+    return ' '.join(re.sub(r'[*`"“”]', '', value).casefold().split()).strip()
+
+
+def verdict_rows(text):
+    for line in text.splitlines():
+        parts = [x.strip().strip('*` ') for x in line.strip().strip('|').split('|')]
+        if len(parts) >= 4 and parts[2].upper() in VERDICTS:
+            yield parts[0], parts[2].upper()
+
+
+def finding_count(text):
+    """Estimate finding groups, without counting supporting nested bullets."""
+    # Ordered findings take precedence over evidence bullets within them.
+    ordered = [len(m[1]) for line in text.splitlines()
+               if (m := re.match(r'^(\s*)\d+[.)]\s+', line))]
+    if ordered:
+        return ordered.count(min(ordered))
+    lines = [line for line in text.splitlines() if line.strip()]
+    # Some reviewers write bold prose findings followed by supporting lists.
+    if lines and re.match(r'^\*\*\S', lines[0]):
+        bold = [line for line in lines if re.match(r'^\*\*\S', line)]
+        return len(bold)
+    bullets = [len(m[1]) for line in text.splitlines()
+               if (m := re.match(r'^(\s*)[-*•]\s+', line))]
+    if bullets:
+        return bullets.count(min(bullets))
+    return max(1, len(re.split(r'\n\s*\n', text.strip()))) if text.strip() else 0
+
+
+def selection_fields(selection):
+    options = selection.get('options') or []
+    effort = [str(o['value']) for o in options
+              if o.get('id') in ('reasoningEffort', 'effort') and o.get('value') is not None]
+    return selection.get('model', ''), ', '.join(effort)
+
+
+def table(headers, rows):
+    print('| ' + ' | '.join(headers) + ' |')
+    print('| ' + ' | '.join('---' for _ in headers) + ' |')
+    for row in rows:
+        print('| ' + ' | '.join(clean(x) for x in row) + ' |')
+
+
+def read_benchmark(connection, parent, meta_prefix=META_PREFIX):
+    # BEGIN keeps metadata, answers and usage on one consistent WAL snapshot.
+    connection.execute('BEGIN')
+    root = connection.execute('''SELECT title FROM orchestration_v2_projection_threads
+        WHERE thread_id=?''', (parent,)).fetchone()
+    if root is None:
+        raise ValueError('thread not found')
+    now = datetime.now().astimezone()
+    attached = {row[0] for row in connection.execute('''SELECT
+        json_extract(a.value, '$.threadId')
+        FROM orchestration_v2_projection_threads t, json_each(t.payload_json, '$.autoreviewers') a
+        WHERE t.thread_id=?''', (parent,))}
+    reviewers = []
+    for tid, title, provider, selection in connection.execute('''SELECT thread_id, title,
+        default_provider, json_extract(payload_json, '$.modelSelection')
+        FROM orchestration_v2_projection_threads
+        WHERE thread_id LIKE '%autoreview-add%'
+        AND json_extract(payload_json, '$.lineage.parentThreadId')=?
+        ORDER BY created_at, thread_id''', (parent,)):
+        reviewers.append(dict(id=tid, title=title, provider=provider,
+                              selection=json.loads(selection or '{}')))
+    if not reviewers:
+        raise ValueError('no autoreviewer children found')
+    by_id = {r['id']: r for r in reviewers}
+    posts = defaultdict(list)
+    unknown_posts = 0
+    # Read feedback internally, never emit message text or excerpts.
+    for sender, text in connection.execute('''SELECT
+        json_extract(payload_json, '$.senderThreadId'), json_extract(payload_json, '$.text')
+        FROM orchestration_v2_projection_messages WHERE thread_id=?
+        AND (json_extract(payload_json, '$.text') LIKE 'Autoreview from %'
+          OR json_extract(payload_json, '$.text') LIKE 'Autoreview findings from reviewers%'
+          OR json_extract(payload_json, '$.text') LIKE 'Delegated task %autoreview-findings%'
+          OR json_extract(payload_json, '$.senderThreadId') LIKE '%autoreview-add%')''', (parent,)):
+        parts = list(split_posts(text))
+        if not parts and sender in by_id:
+            # Newer T3 builds post `<reviewer short name>:` on the first line, sent by the reviewer.
+            first, _, rest = (text or '').partition('\n')
+            if first.strip().endswith(':') and normalized(first.strip()[:-1]) == normalized(
+                    by_id[sender]['title'].split(':', 1)[0]):
+                parts = [(sender, None, rest.strip())]
+        if not parts:
+            unknown_posts += 1
+            continue
+        for thread_id, title, body in parts:
+            if LGTM.fullmatch(body or '') or not body:
+                continue
+            target = thread_id if thread_id in by_id else None
+            if target is None and thread_id is None and sender in by_id:
+                target = sender
+            if target is None and title:
+                candidates = [r['id'] for r in reviewers if r['title'] == title]
+                target = candidates[0] if len(candidates) == 1 else None
+            if target in by_id:
+                posts[target].append(body)
+            else:
+                unknown_posts += 1
+    earliest = None
+    totals = defaultdict(Counter)
+    unmatched_verdicts = 0
+    verdicts = defaultdict(Counter)
+    for r in reviewers:
+        tid = r['id']
+        messages = {}
+        answers = defaultdict(list)
+        for mid, run, role, streaming, created, updated, text in connection.execute('''SELECT
+            message_id, run_id, role, streaming, created_at, updated_at,
+            json_extract(payload_json, '$.text')
+            FROM orchestration_v2_projection_messages WHERE thread_id=?''', (tid,)):
+            messages[mid] = (created, updated)
+            if role == 'assistant' and not streaming and (text or '').strip():
+                answers[run].append((updated, created, text.strip()))
+        delays = []
+        lgtm = answered = pending = other = 0
+        selections = []
+        batch_runs = set()
+        for run, status, requested, mid, selection in connection.execute('''SELECT
+            run_id, status, requested_at, json_extract(payload_json, '$.userMessageId'),
+            json_extract(payload_json, '$.modelSelection')
+            FROM orchestration_v2_projection_runs WHERE thread_id=? ORDER BY ordinal''', (tid,)):
+            if not mid or not (mid.startswith('message:autoreview-batch:')
+                               or mid.startswith('message:delegated-task:')):
+                other += 1
+                continue
+            batch_runs.add(run)
+            selections.append(json.loads(selection or '{}'))
+            if mid in messages:
+                sent = stamp(messages[mid][0])
+                earliest = min(earliest, sent) if earliest else sent
+            else:
+                sent = None
+            if status != 'completed' or not answers[run]:
+                pending += 1
+                continue
+            # Last assistant message in a completed run is the final answer;
+            # earlier commentary/tool-progress messages do not count as answers.
+            updated, _, text = max(answers[run], key=lambda x: (x[0], x[1]))
+            answered += 1
+            lgtm += bool(LGTM.fullmatch(text))
+            if sent is not None and stamp(updated) >= sent:
+                delays.append((stamp(updated) - sent).total_seconds())
+            if meta_prefix and r['title'].casefold().startswith(meta_prefix.casefold()):
+                for label, verdict in verdict_rows(text):
+                    exact = [x['id'] for x in reviewers
+                             if normalized(x['title']) == normalized(label)]
+                    # Accept a short role name only if unique across removed AND attached.
+                    candidates = exact or [x['id'] for x in reviewers
+                        if normalized(x['title'].split(':', 1)[0]) == normalized(label)]
+                    if len(candidates) == 1:
+                        verdicts[candidates[0]][verdict] += 1
+                    else:
+                        unmatched_verdicts += 1
+        usage = Counter()
+        known = missing = 0
+        for turn_id, run, provider, payload in connection.execute('''SELECT q.provider_turn_id,
+            n.run_id, p.provider, json_extract(q.payload_json, '$.turnTokenUsage')
+            FROM orchestration_v2_projection_provider_turns q
+            LEFT JOIN orchestration_v2_projection_nodes n ON n.node_id=q.node_id
+            LEFT JOIN orchestration_v2_projection_provider_threads p
+              ON p.provider_thread_id=q.provider_thread_id
+            WHERE q.thread_id=?''', (tid,)):
+            if run not in batch_runs:
+                continue
+            u = json.loads(payload or '{}')
+            if (u.get('usageStatus') != 'complete'
+                    or not isinstance(u.get('inputTokens'), int)
+                    or not isinstance(u.get('outputTokens'), int)):
+                missing += 1
+                totals[provider]['missing'] += 1
+                continue
+            known += 1
+            # inputTokens already includes cached input/cache creation; output
+            # already includes reasoning. Never add those subcounts again.
+            usage['input'] += u['inputTokens']
+            usage['output'] += u['outputTokens']
+            totals[provider]['input'] += u['inputTokens']
+            totals[provider]['output'] += u['outputTokens']
+            totals[provider]['known'] += 1
+        models, efforts = [], []
+        for sel in selections or [r['selection']]:
+            model, effort = selection_fields(sel)
+            if model not in models:
+                models.append(model)
+            if effort not in efforts:
+                efforts.append(effort)
+        r.update(status='attached' if tid in attached else 'removed', models=models,
+                 efforts=efforts, answered=answered, lgtm=lgtm, pending=pending, other=other,
+                 delays=sorted(delays), known=known, missing=missing, usage=usage,
+                 posts=len(posts[tid]), findings=sum(finding_count(t) for t in posts[tid]))
+    connection.rollback()
+    return dict(now=now, reviewers=reviewers, earliest=earliest, totals=totals,
+                verdicts=verdicts, unmatched_verdicts=unmatched_verdicts,
+                unknown_posts=unknown_posts)
+
+
+def render(data):
+    print('Snapshot: ' + data['now'].isoformat(timespec='seconds'))
+    print()
+    rows = []
+    for r in data['reviewers']:
+        d = r['delays']
+        timings = [f'{statistics.median(d):.2f}', f'{d[math.ceil(.9 * len(d)) - 1]:.2f}',
+                   f'{max(d):.2f}'] if d else ['', '', '']
+        marker = '*' if r['missing'] else ''
+        usage = [f"{r['usage'][k]:,}{marker}" if r['known'] else '' for k in ('input', 'output')]
+        rows.append([r['title'], r['provider'], ' / '.join(r['models']),
+                     ' / '.join(x or '(unrecorded)' for x in r['efforts']), r['status'],
+                     r['answered'], r['lgtm'], f"{r['findings']} / {r['posts']}", *timings,
+                     *usage, '/'.join(str(data['verdicts'][r['id']][v]) for v in VERDICTS)])
+    table(['Reviewer', 'Provider', 'Model', 'Effort', 'Status', 'Answered', 'LGTM',
+           'Findings≈ / posts', 'Median s', 'p90 s', 'Max s', 'Input tokens',
+           'Output tokens', 'H/W/S/D/O/N'], rows)
+    print()
+    earliest = data['earliest']
+    hours = (data['now'] - earliest).total_seconds() / 3600 if earliest else 0
+    if hours > 0:
+        print(f"Common wall-time window: {earliest.isoformat()} → "
+              f"{data['now'].isoformat(timespec='seconds')} ({hours * 60:.2f} minutes).")
+        print()
+        rate_rows = []
+        labels = {'claudeAgent': 'Claude', 'codex': 'Codex'}
+        providers = ['claudeAgent', 'codex'] + sorted(k for k in data['totals'] if k and k not in labels)
+        for provider in providers:
+            label = labels.get(provider, provider)
+            u = data['totals'][provider]
+            values = [f"{u[k]:,}" for k in ('input', 'output')] if u['known'] else ['', '']
+            rates = [f"{u[k] / hours:,.0f}" for k in ('input', 'output')] if u['known'] else ['', '']
+            total_rate = f"{(u['input'] + u['output']) / hours:,.0f}" if u['known'] else ''
+            rate_rows.append([label, *values, *rates, total_rate, f"{u['known']} / {u['missing']}"])
+        table(['Side', 'Input tokens', 'Output tokens', 'Input/h≈', 'Output/h≈',
+               'Total tokens/h≈', 'Known / missing turns'], rate_rows)
+    print()
+    print('Turnaround = final non-streaming assistant message updated_at minus the linked '
+          'batch user message created_at, in completed runs; includes the initial handoff '
+          'and queue time. Earlier commentary is excluded. p90 uses nearest rank.')
+    print()
+    print('Findings≈ estimates top-level numbered findings, otherwise bold prose groups, '
+          'otherwise top-level bullets, otherwise paragraphs, in feedback actually posted '
+          'to the parent. Posts is the exact forwarded-message count. No finding text is emitted.')
+    print()
+    print('H/W/S/D/O/N = HOLDS/WRONG/STALE/DUPLICATE/OUT OF REMIT/NIT. Counts are parsed '
+          'judgment lines from completed Meta-review answers; the two judges are combined, '
+          'repeated judgments are counted again, and zero means no recorded judgment. '
+          f"Unattributed verdicts: {data['unmatched_verdicts']}; unrecognized feedback posts: "
+          f"{data['unknown_posts']}.")
+    print()
+    print('Tokens sum provider-reported complete turnTokenUsage inputTokens/outputTokens '
+          '(main-agent scope); cache reads/writes are included in input, reasoning in output. '
+          'They are recorded usage, not independently verified billing or weekly-quota units. '
+          'Context-window tokenUsage is not summed. * marks a partial total with turns lacking '
+          'complete usage; entirely unknown totals are blank. No session logs were needed.')
+    print()
+    pending = sum(r['pending'] for r in data['reviewers'])
+    other = sum(r['other'] for r in data['reviewers'])
+    no_delay = sum(r['answered'] - len(r['delays']) for r in data['reviewers'])
+    print(f'Unanswered/non-completed batch runs: {pending}; non-batch runs excluded: {other}; '
+          f'answered batches without usable timestamps: {no_delay}. Rates extrapolate '
+          'recorded usage across the common wall-time window, including removed reviewers '
+          'and both meta-reviewers; incomplete turns make them lower bounds. Small sample; '
+          'reviewers receive different batches whenever they become idle. This is not a '
+          'controlled model ranking or a forecast of weekly consumption.')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--thread', required=True, help='parent T3 thread id')
+    parser.add_argument('--db', type=Path, default=DB,
+                        help='T3 state database, opened read-only (default: $T3_STATE_DB or %(default)s)')
+    parser.add_argument('--meta-prefix', default=META_PREFIX,
+                        help='title prefix of meta-reviewer children whose verdict tables are counted '
+                             '(case-insensitive, default %(default)r; empty string disables)')
+    args = parser.parse_args()
+    try:
+        if not args.db.exists():
+            raise OSError('missing database')
+        with sqlite3.connect(args.db.resolve().as_uri() + '?mode=ro', uri=True, timeout=2) as connection:
+            data = read_benchmark(connection, args.thread, args.meta_prefix)
+        render(data)
+    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+        # Never leak database content, message bodies or session data in errors.
+        print('autoreview-bench: local state unavailable or schema unsupported', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

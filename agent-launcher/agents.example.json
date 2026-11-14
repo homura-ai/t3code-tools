@@ -1,0 +1,18 @@
+{
+  "roles_dir": "roles",
+  "request_id_prefix": "example-run-1-",
+  "first": ["Planner"],
+  "models_doc": "AGENTS.md",
+  "message": "You are {name}. Follow the instructions in {path}. Read {repo}/AGENTS.md first.",
+  "models": {
+    "Opus": ["claudeAgent", "claude-opus-5-5", "effort"],
+    "Sonnet": ["claudeAgent", "claude-sonnet-5-5", "effort"],
+    "Fable": ["claudeAgent", "claude-fable-5-2", "effort"],
+    "Sol": ["codex", "gpt-6.1-sol", "reasoningEffort"]
+  },
+  "roles": {
+    "Planner": "Opus high",
+    "Builder": "Sonnet medium",
+    "Code Reviewer": "Sol high"
+  }
+}

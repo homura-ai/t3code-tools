@@ -1,0 +1,18 @@
+{
+  "api": "http://127.0.0.1:8090/api",
+  "token_file": null,
+  "board": "YOUR_BOARD_ID",
+  "lists": {},
+  "only_agent_cards": false,
+  "any_author_lists": [],
+  "agents_user": "AGENTS_USER_ID",
+  "usernames": {"HUMAN_USER_ID": "alex"},
+  "card_url": "https://board.example:8445/b/{board}/board/{card}",
+  "t3": "~/.t3/bin/t3",
+  "project": "~/code/my-project",
+  "threads_tsv": null,
+  "state_dir": "~/.local/state/board-replies",
+  "poll_seconds": 5,
+  "retry_seconds": 30,
+  "timezone": null
+}

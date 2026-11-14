@@ -1,0 +1,5 @@
+<!doctype html><meta charset=utf-8><title>Signing in as DISPLAY_NAME</title><p>Signing in as DISPLAY_NAME…</p><script>
+fetch('/users/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'USERNAME',password:"PASSWORD"})})
+.then(r=>r.json()).then(d=>{localStorage.setItem('Meteor.loginToken',d.token);localStorage.setItem('Meteor.loginTokenExpires',d.tokenExpires);localStorage.setItem('Meteor.userId',d.id);
+document.cookie='board_user=USERNAME; path=/; max-age=31536000; SameSite=Lax';var m=document.cookie.match(/(?:^|; )board_next=([^;]*)/),n=m&&decodeURIComponent(m[1]);document.cookie='board_next=; path=/; max-age=0';location.replace(n&&/^\/b\/[A-Za-z0-9]+\/[A-Za-z0-9-]+(\/[A-Za-z0-9]+)?$/.test(n)?n:'/b/BOARD_ID/BOARD_SLUG');})
+.catch(e=>document.body.append(' Failed: '+e));</script>
