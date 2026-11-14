@@ -20,7 +20,7 @@ A Claude Code session that lives outside T3 Code and restarts T3 when it dies.
   agent can tell you what may need resuming.
 - Optional: relay usage-category events (limit hit or available again) from a
   JSONL file, such as the one the `claude-usage` tool (usage-meters, in the companion
-  `agent-tools` repo) writes.
+  `homustack` repo) writes.
 
 ## Status
 

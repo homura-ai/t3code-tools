@@ -86,7 +86,7 @@ touches no thread but still issues (and revokes) a read-only
   full-access threads from it (`runtime_mode_escalation_denied`). Stop those
   from a full-access agent's own T3 tools or the UI.
 - `revive-agents.py` only reads the `[Usage] USAGE CATEGORY DEATH` notices
-  that the `claude-usage` tool (usage-meters, in the companion `agent-tools`
+  that the `claude-usage` tool (usage-meters, in the companion `homustack`
   repo) posts into threads. Times in them are
   Eastern Time, as that tool writes them. Categories are inferred from model
   names (Fable, Opus, Sonnet, Haiku, Codex).
