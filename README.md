@@ -49,7 +49,8 @@ service; the Wekan files are untested as edited here. Tests:
 
 **`load-build/`** has `t3-load-build`, which loads a staged T3 Code build: it verifies the file
 and checksum, restarts T3 on it, wakes an agent thread, and rolls back to the previous build by
-itself if T3 doesn't come up or the configured wake message cannot be delivered. It needs a `~/.local/bin/t3code` launcher that starts the newest
+itself if T3 doesn't come up or the configured wake command returns failure twice. Wake-command timeouts
+or launch errors abort without rollback. It needs a `~/.local/bin/t3code` launcher that starts the newest
 AppImage in the build folder (not part of T3 Code). Status: tested with fakes only. Tests:
 `python3 -m unittest discover -s load-build -p 'test_*.py' -v`.
 
