@@ -2,9 +2,10 @@
 
 Agents post cards on a self-hosted Wekan board. When a human comments on a
 card, `board-replies.py` sends the comment to the T3 Code thread of the agent
-named in the card title (`<agent name>: <matter>`). Each comment is delivered
-once, even across restarts. Delivered ids are saved atomically, and only after
-a successful send. If delivery fails, the relay comments on the card, keeps
+named in the card title (`<agent name>: <matter>`). Delivered ids are saved
+atomically after a successful send and skipped on later runs. A crash between
+the send and saving its id can cause that comment to be delivered again. If
+delivery fails, the relay comments on the card, keeps
 retrying, and comments again once it has delivered. Cards with no name prefix
 get one comment explaining the format. With no state file a real run refuses to
 start: run `--seed` once first, which marks every comment and unprefixed card already
