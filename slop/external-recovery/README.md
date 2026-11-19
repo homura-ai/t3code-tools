@@ -22,19 +22,6 @@ A Claude Code session that lives outside T3 Code and restarts T3 when it dies.
   JSONL file, such as the one the `claude-usage` tool (usage-meters, in the companion
   `homustack` repo) writes.
 
-## Status
-
-- **Earlier hard-coded version: worked.** Over several days it
-  noticed T3 going down and back up and delivered its notices.
-- **This general version: untested as a whole.** The Kitty + Claude window
-  has not been started with it. Checked offline and read-only:
-  - 35 offline tests pass (`python3 -m unittest discover -p 'test_*.py'`).
-    They use temporary directories, fixture SQLite files and mocked process
-    launches. They check that a fixture database is unchanged after a scan.
-  - `observe()` correctly reported the running T3 backend as up.
-  - `scan_stopped.py` ran read-only against a real T3 database.
-  - `systemd-analyze --user verify` accepts the unit file.
-
 ## Requirements
 
 Linux with systemd user services, `ss` (iproute2), Kitty, Python 3.9+

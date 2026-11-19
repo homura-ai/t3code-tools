@@ -2,9 +2,10 @@
 
 Agents post cards on a self-hosted Wekan board. When a human comments on a
 card, `board-replies.py` sends the comment to the T3 Code thread of the agent
-named in the card title (`<agent name>: <matter>`). Each comment is delivered
-once, even across restarts. Delivered ids are saved atomically, and only after
-a successful send. If delivery fails, the relay comments on the card, keeps
+named in the card title (`<agent name>: <matter>`). Delivered ids are saved
+atomically after a successful send and skipped on later runs. A crash between
+the send and saving its id can cause that comment to be delivered again. If
+delivery fails, the relay comments on the card, keeps
 retrying, and comments again once it has delivered. Cards with no name prefix
 get one comment explaining the format. With no state file a real run refuses to
 start: run `--seed` once first, which marks every comment and unprefixed card already
@@ -16,25 +17,6 @@ agent rules for using the board (`BOARD-RULES.md`). The proxy adds the agents'
 API token, so agents need no login, and it has a "who are you?" picker with
 auto-login pages for humans.
 
-## Status
-
-- `board-replies.py`: **working.** The same code (apart from the config
-  loading) has run as a service for days, and `--dry-run` against that live
-  board read it and exited 0 without touching its state. `python3 board-replies/test_board_replies.py` passes 8
-  offline tests against a fake Wekan API and a fake `t3`: dry run, delivery,
-  delivered only once, failure notice then recovery notice, config checks,
-  refusing to start without state, `--seed` then only new comments, and a bad
-  `card_url`.
-- `wekan/`: **working in its original setup, untested as edited here.** The
-  placeholders (ROOT_URL, users, the published address) replaced real values,
-  and the edited files have not been started.
-- `board-setup/board_setup.py`: builds a new Wekan board (lists, labels,
-  custom fields, card and view settings, rules, webhooks, template cards) from
-  a JSON config, or prints a read-only inventory of an existing board. Writes
-  are refused anywhere except the board the run itself created.
-  `python3 board-setup/test_board_setup.py` passes 8 offline tests against a
-  fake Wekan API.
-
 ## Dependencies
 
 Python 3.9+ (standard library only), the `t3` CLI from T3 Code, and a Wekan
@@ -43,14 +25,9 @@ systemd user session.
 
 ## Install
 
-If you are replacing an older install at these paths, write the config before
-replacing either file, or the running relay exits for lack of one. Keep
-`state_dir` where the old state is, and don't `--seed` there: the existing
-state already holds the delivered list.
-
 ```bash
+mkdir -p ~/.local/bin ~/.config/board-relay ~/.config/systemd/user
 install -m 755 board-replies/board-replies.py ~/.local/bin/board-replies.py
-mkdir -p ~/.config/board-relay
 cp board-replies/config.example.json ~/.config/board-relay/config.json   # edit: board, agents_user, project
 board-replies.py --dry-run          # one read-only pass: shows what it would send
 board-replies.py --seed             # once: mark what is already on the board as handled
@@ -72,7 +49,8 @@ Caddyfile and `site/` to `~/.local/share/wekan/proxy/`. Make one
 `AGENTS_TOKEN=...` in `~/.local/share/wekan/proxy/env` (mode 600). Set
 ROOT_URL, then run `systemctl --user daemon-reload && systemctl --user start wekan-pod`.
 
-Board setup:
+Use the board setup tool to create a board from JSON or read an existing board's inventory.
+It writes only to the board it creates.
 
 ```bash
 python3 board-setup/board_setup.py check --config board-setup/board.example.json   # offline

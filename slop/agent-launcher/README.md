@@ -10,19 +10,6 @@ Scripts for running a team of T3 Code agents, one thread per role file.
 | `make-run-repo.sh SRC DEST` | Builds a clean run repo from a prep repo's HEAD, leaving out top-level `__*` files (and anything passed to `--exclude`). Exits 2 if the result still mentions SRC's path or a left-out `__` file. `--replace` only wipes a run repo it built itself, never one where `threads.tsv` exists. |
 | `tcp-relay.py ADDRESS PORT` | Forwards `ADDRESS:PORT` to `127.0.0.1:PORT`, so another machine (for example on a tailnet) can reach a loopback-only T3. |
 
-## Status
-
-- **Earlier hard-coded versions: worked.** They started and ran a team of
-  dozens of threads.
-- **These general versions: tested offline only.** 14 tests pass (`python3 -m unittest -v test_launcher`). They run every script
-  against a fake `t3` CLI, a fake MCP HTTP server and temporary copies. They
-  cover ordering, ids, reruns, dry runs, model and settings checks, the
-  `--all-model` id guard, revive's probe, stop's dry run, the relay, and the
-  repo builder's literal path rewrite and leftover check.
-- `start-agents.py --dry-run` on `examples/project` with the real `t3` CLI
-  passed T3's capability check for all three example models.
-- Nothing was started, stopped or sent on the real T3.
-
 ## Requirements
 
 Python 3.9+ standard library, the T3 Code `t3` CLI (`$T3_CLI`, else `t3` on
