@@ -1,6 +1,8 @@
 # load-build
 
-`t3-load-build` loads a staged T3 Code build: it verifies the file, restarts T3 on it, wakes an agent thread, and rolls back by itself if the new build doesn't come up or the configured wake command returns failure twice. It replaces hand-written one-off restart scripts.
+`t3-load-build` verifies a staged T3 Code build, restarts T3 on it, and wakes an
+agent thread. It rolls back if the build fails to start or the wake command
+returns failure twice.
 
 ```sh
 t3-load-build <staged-file> <sha256> <wake-message-file> [--detach] [--live PATH] [--settle SECONDS]

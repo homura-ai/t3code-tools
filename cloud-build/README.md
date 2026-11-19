@@ -15,18 +15,6 @@ Modes:
 - `typecheck`: `effect-tsgo tsrs --noEmit` per `--package` (exact workspace
   names, checked against the archive first).
 
-## Status
-
-Partly proven.
-
-- A real cold `build` run worked: the AppImage came back, the
-  checksums matched, and the box was deleted.
-- The pnpm dependency-cache (warm) path has never run against a real box.
-  Only the unit tests cover it.
-- 13 offline unit tests pass (`python3 -m unittest -v test_boat_t3_build`).
-  They mock `boat` and `git`, and some run the generated shell snippets
-  locally with fake commands. Nothing contacts the network.
-
 ## Requirements
 
 - Python 3.11+ (uses `hashlib.file_digest`), `git`, `sha256sum`.
